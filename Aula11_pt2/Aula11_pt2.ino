@@ -56,7 +56,7 @@ int main(){
     
     MediaLeitura = SomaLeitura / AMOSTRAS;
     
-    tensao = ((MediaLeitura * 255.0) / (1023.0)); //Cálculo da temperatura 5X=200 logo X = 45
+    tensao = ((MediaLeitura * 255.0) / (1023.0));
 
     OCR0A = tensao;
 
