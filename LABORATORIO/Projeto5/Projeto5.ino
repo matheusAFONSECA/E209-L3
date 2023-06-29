@@ -3,6 +3,9 @@
 #define BAUD 9600                    // Taxa de transmissão para comunicação UART
 #define MYUBRR FOSC / 16 / BAUD - 1  // Cálculo do valor do registrador UBRR para configurar a comunicação UART
 
+// configurações de pino de sensor de gotas
+#define SensorGotas PD2
+
 // bibliotecas para manipular strings e booleanos
 #include <stdio.h>        // -> manipulação de strings
 #include <stdbool.h>      // -> utilização do tipo booleano
@@ -19,6 +22,9 @@ char fluxoNecessarioAux[10];  // string aux para retornar um valor String para o
 float potencia;               // define a potência que o motor irá trabalhar
 char potenciaAux[10];         // string aux para retornar um valor String para o monitor serial
 char resposta[100];           // char que aux para mostrar os valores que foram atribuidos para o tempo e volume
+int numeroGotasDetectadas;    // numero de gotas detectadas por pelo sensor de gotas
+int controlenumerodegotas;    // controle da quantidade de gotas
+int pot;                      // potência que o motor irá funcionar
 
 
 // FUNÇÕES
@@ -64,20 +70,52 @@ void UART_Receive(char *dados, int tamanho) {     // recebe os dados pelo monito
   UART_Transmit("\n");
 }
 
-float fluxoNecessario(int tempoFluxo, int volumeFluxo){     // função que faz o calculo do fluxo necessario do motor 
+float fluxoNecessario(int tempoFluxo, int volumeFluxo) {    // função que faz o calculo do fluxo necessario do motor
+
   return ((float)volumeFluxo) / ((float)tempoFluxo / 60);
 
   /*
-  -> coloquei (float)volume dessa forma para calcular porque precisava de rotornar um valor em float,
-  mas o tipo da var é int
+    -> coloquei (float)volume dessa forma para calcular porque precisava de rotornar um valor em float,
+    mas o tipo da var é int
   */
+}
+
+ISR(INT0_vect) {        // Rotina de tratamento da interrupção INT0 para o SensorDeGotas
+  numeroGotasDetectadas++;
+  controlenumerodegotas = 1;
+}
+
+void motorFunciona(int potenciaMotor) {    // faz o motor funcionar
+
+  pot = map(potenciaMotor, 0, 100, 0, 225);   // coloca a leitura do POT entre 0 e 255
+  OCR0A = pot;                                // define a potência do motor
+
 }
 
 void configuracoes() {    // define as configurações necessárias para o código rodar
   // inicia a comunicacao UART
   UART_Init(MYUBRR);
 
+  // Configurando o pino do sensor de gotas como entrada digital
+  // Habilita o resistor interno de pull-up no pino 2 (PD2)
+  PORTD = 0b00000100;
+  // Configura a interrupção externa 0 para transição de descida
+  EICRA = 0b00000010;
+  // Habilita a interrupção externa 0
+  EIMSK = 0b00000001;
+
+  // configuração do PWM -> Motor
+  TCCR0A |= (1 << WGM00) | (1 << WGM01);    // modo PWM rápido
+  TCCR0A |= (1 << COM0A1) | (1 << COM0A0);  // liga o pino PWM na comparação do contador com OCR
+  TCCR0B |= (1 << CS01);      // prescaler = 8
+  OCR0A = 0;   // INICIALIZA O VALOR DE OCR como zero
+
+  // Habilita a interrupção global
   sei();
+
+  // variáveis para o sensor de gotas
+  controlenumerodegotas = 0;    // controla o numero de gotas
+  numeroGotasDetectadas = 0;    // quantidade de gotas detectadas
 }
 
 void executa() {    // função que vai rodar em loop de execução do sistema
@@ -97,7 +135,7 @@ void executa() {    // função que vai rodar em loop de execução do sistema
   for (int i = 0; i < sizeof(tempoAux); i++) {
     tempoAux[i] = '\0';
   }
-  
+
   // Entrada de dados
   UART_Transmit("Entrando com o dados:\n");
 
@@ -119,7 +157,7 @@ void executa() {    // função que vai rodar em loop de execução do sistema
 
   // Saindo com os valores inseridos pelo monitor serial
   UART_Transmit("Dados inseridos pelo monitor, fluxo e potencia:\n");
-  sprintf(resposta, "Volume: %d ml\nTempo de infusao: %d min\n", volume, tempo);
+  sprintf(resposta, "Volume: %d ml\nTempo de infusao: %d h\n", volume, tempo / 60);
   UART_Transmit(resposta);
 
   dtostrf(fluxo, 4, 2, fluxoNecessarioAux);     // transformando o fluxo em string para saída no monitor serial
@@ -140,8 +178,11 @@ void executa() {    // função que vai rodar em loop de execução do sistema
     if (opcao[0] == 's' && opcao[1] == 'i' && opcao[2] == 'm') {
       controle = true;        // volta pra colocar as informações
     }
-    else if (opcao[0] == 'n'&& opcao[1] == 'a' && opcao[2] == 'o') {
+    else if (opcao[0] == 'n' && opcao[1] == 'a' && opcao[2] == 'o') {
       // mostra os valores calculados do erro e deixa o motor funcionando
+
+      // chamando a função que faz o motor funcionar
+      motorFunciona (int(potencia));
     }
     //Entrada inválida
     else {
@@ -159,13 +200,13 @@ int main() {  // funcao principal
   configuracoes();
 
   while (1) {
-    executa();    // chama a função que realiza a execução do sistema
+    executa();    // chama a função que realiza a execução do sistema -> fica em loop
   }
 
   /*
-  -> separamos a int main dessa forma para facilitar a programação do código, uma
-  vez que cada um faz uma função do código, daí é só adicionar a parte que foi feita
-  e chamar a função que a realiza
+    -> separamos a int main dessa forma para facilitar a programação do código, uma
+    vez que cada um faz uma função do código, daí é só adicionar a parte que foi feita
+    e chamar a função que a realiza
   */
 
 }
