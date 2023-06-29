@@ -5,10 +5,14 @@
 
 // configurações de pino de sensor de gotas
 #define SensorGotas PD2
+#define Motor (1 << PD6)
+#define Trimpot (1 << PC0)
+#define Buzzer (1 << PD4)
 
 // bibliotecas para manipular strings e booleanos
 #include <stdio.h>        // -> manipulação de strings
 #include <stdbool.h>      // -> utilização do tipo booleano
+#include <avr/io.h>
 
 // VAR AUX
 int volume;                   // volume em ml
@@ -25,7 +29,6 @@ char resposta[100];           // char que aux para mostrar os valores que foram 
 int numeroGotasDetectadas;    // numero de gotas detectadas por pelo sensor de gotas
 int controlenumerodegotas;    // controle da quantidade de gotas
 int pot;                      // potência que o motor irá funcionar
-
 
 // FUNÇÕES
 // funções para usar a UART
@@ -85,9 +88,9 @@ ISR(INT0_vect) {        // Rotina de tratamento da interrupção INT0 para o Sen
   controlenumerodegotas = 1;
 }
 
-void motorFunciona(int potenciaMotor) {    // faz o motor funcionar
+void motorFunciona(int potenciaMotor) {     // faz o motor funcionar
 
-  pot = map(potenciaMotor, 0, 100, 0, 225);   // coloca a leitura do POT entre 0 e 255
+  pot = map(potenciaMotor, 0, 100, 0, 255);   // coloca a leitura do POT entre 0 e 255
   OCR0A = pot;                                // define a potência do motor
 
 }
@@ -105,10 +108,19 @@ void configuracoes() {    // define as configurações necessárias para o códi
   EIMSK = 0b00000001;
 
   // configuração do PWM -> Motor
-  TCCR0A |= (1 << WGM00) | (1 << WGM01);    // modo PWM rápido
-  TCCR0A |= (1 << COM0A1) | (1 << COM0A0);  // liga o pino PWM na comparação do contador com OCR
-  TCCR0B |= (1 << CS01);      // prescaler = 8
-  OCR0A = 0;   // INICIALIZA O VALOR DE OCR como zero
+  DDRD |= Motor; // configura saída para o PWM
+  PORTD &= ~Motor; // PWM inicia desligado
+  // Configura modo FAST PWM e modo do comparador A
+  TCCR0A |= (1 << WGM01) | (1 << WGM00) | (1 << COM0A1);
+  TCCR0B = 1; // Seleciona opção para frequência
+  OCR0A = 0;
+
+  // configuração do PWM -> trimpot para acionar o buzzer
+  // Configura o Timer1 para operar em modo Fast PWM de 8 bits
+  TCCR1A |= (1 << WGM10) | (1 << COM1A1);
+  TCCR1B |= (1 << WGM12) | (1 << CS10);
+  // Define o valor inicial do comparador A (OCR1A)
+  OCR1A = 0;
 
   // Habilita a interrupção global
   sei();
@@ -116,6 +128,7 @@ void configuracoes() {    // define as configurações necessárias para o códi
   // variáveis para o sensor de gotas
   controlenumerodegotas = 0;    // controla o numero de gotas
   numeroGotasDetectadas = 0;    // quantidade de gotas detectadas
+
 }
 
 void executa() {    // função que vai rodar em loop de execução do sistema
@@ -172,17 +185,30 @@ void executa() {    // função que vai rodar em loop de execução do sistema
 
   // outro loop que faz o sistema rodar o motor -> buzzer desligado
   do {
+    // Limpa o buffer da opcao -> necessário para entrada de dados posterior
+    for (int i = 0; i < sizeof(opcao); i++) {
+      opcao[i] = '\0';
+    }
+
     UART_Transmit("Deseja alterar algum valor? ");
     UART_Receive(opcao, 4);   // recebimento da opcao escolhida
 
     if (opcao[0] == 's' && opcao[1] == 'i' && opcao[2] == 'm') {
       controle = true;        // volta pra colocar as informações
+
+      OCR0A = 0;              // desliga o motor
     }
     else if (opcao[0] == 'n' && opcao[1] == 'a' && opcao[2] == 'o') {
       // mostra os valores calculados do erro e deixa o motor funcionando
 
       // chamando a função que faz o motor funcionar
-      motorFunciona (int(potencia));
+      int op = int(potencia);   // var aux para mandar a potencia que o motor ira trabalhar
+      motorFunciona(op);
+
+      // saida da quantidade de gotas
+      sprintf(resposta, "Numero de gotas: %d \n", numeroGotasDetectadas);
+      UART_Transmit(resposta);
+
     }
     //Entrada inválida
     else {

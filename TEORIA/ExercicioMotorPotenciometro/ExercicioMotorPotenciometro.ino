@@ -22,7 +22,7 @@ int main(){
     while(ADCSRA & (1 << ADSC));   // aguarda o fim da conversão
     Serial.println(ADC);
     conv = map(ADC, 0, 1023, 0, 225);   // coloca a leitura do POT entre 0 e 255
-    OCR0A = conv;
+    OCR0A = 200;
 
     ADCSRA |= (1 << ADSC);      // inicia uma nova conversão
   }
