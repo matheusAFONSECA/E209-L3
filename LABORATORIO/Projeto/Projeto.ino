@@ -6,7 +6,7 @@
 // configurações de pino de sensor de gotas
 #define SensorGotas PD2
 #define Motor (1 << PD6)
-#define Trimpot (1 << PC0)
+//#define Trimpot (1 << PC0)
 #define Buzzer (1 << PD4)
 
 // bibliotecas para manipular strings e booleanos
@@ -29,6 +29,12 @@ char resposta[100];           // char que aux para mostrar os valores que foram 
 int numeroGotasDetectadas;    // numero de gotas detectadas por pelo sensor de gotas
 int controlenumerodegotas;    // controle da quantidade de gotas
 int pot;                      // potência que o motor irá funcionar
+double tensao;                // tensão que está sendo aplicada pelo trimpot
+int distancia;                // distancia que esta sendo detectada
+int contador;                 // contador aux para calculo do tempo -> tempo no em segundos desde que a primeira gota caiu
+float erro;                   // var para calculo do erro
+float fluxoReal;              // var para o calculo do fluxo real
+char erroAux[10];             // string aux para retornar um valor String para o monitor serial
 
 // FUNÇÕES
 // funções para usar a UART
@@ -95,6 +101,46 @@ void motorFunciona(int potenciaMotor) {     // faz o motor funcionar
 
 }
 
+int ADC_read(u8 ch) {     // faz a leitura ADC do pino
+  char i;
+  int ADC_temp = 0;                     // ADC temporário, para manipular leitura
+  int ADC_read = 0;                     // ADC_read
+  ch &= 0x07;
+  ADMUX = (ADMUX & 0xF8) | ch;          // Configura o canal de leitura do ADC
+  ADCSRA |= (1 << ADSC);                // Inicia uma conversão
+  while (!(ADCSRA & (1 << ADIF)))
+    ;                                   // Aguarda a conclusão da conversão
+  for (i = 0; i < 8; i++) {             // Realiza a conversão 8 vezes para maior precisão
+    ADCSRA |= (1 << ADSC);              // Inicia uma conversão
+    while (!(ADCSRA & (1 << ADIF)))
+      ;                                 // Aguarda a conclusão da conversão
+    ADC_temp = ADCL;                    // Lê o registro ADCL
+    ADC_temp += (ADCH << 8);            // Lê o registro ADCH
+    ADC_read += ADC_temp;               // Acumula o resultado (8 amostras) para média
+  }
+  ADC_read = (ADC_read / 8);            // Calcula a média das amostras
+
+  return ADC_read;                      // retorna a leitua feita no pino PC0
+}
+
+// Rotina de interrupção do Timer2 (ocorre quando o contador do Timer0 estoura)
+ISR(TIMER2_OVF_vect) {
+  if (controlenumerodegotas == 1) {           //quando detectar a primeira gota inicia a contagem
+    if (contador > (tempo * 60 * 61)) {       // quando o contador atingir o tempo(min) ele desliga o motor
+      contador = 0;                           // zera a contagem de tempo
+      controlenumerodegotas = 0;
+      motorFunciona(0);
+
+      /*
+        -> tempo * 60 * 61: converte o tempo de min para segundos e depois converte para a numeração que o nosso timer está
+        trabalhando
+        -> 1 segundo = 61
+      */
+    }
+    contador++;                               // incrementa o contador(seg)
+  }
+}
+
 void configuracoes() {    // define as configurações necessárias para o código rodar
   // inicia a comunicacao UART
   UART_Init(MYUBRR);
@@ -122,12 +168,34 @@ void configuracoes() {    // define as configurações necessárias para o códi
   // Define o valor inicial do comparador A (OCR1A)
   OCR1A = 0;
 
+  // inicia o buzzer desligado
+  PORTD &= ~Buzzer;
+
+  // configuração ADC -> ajudar na leitura do PC0
+  // Configura a referência de tensão do ADC
+  ADMUX = (1 << REFS0);
+  // Habilita o ADC e configura o prescaler
+  ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
+
+  // Configura o Timer2 para operar em modo normal
+  TCCR2A = 0;
+  TCCR2B = 0;
+  // Define o prescaler para 256
+  TCCR2B |= (1 << CS22);
+  // Define o valor inicial do contador do Timer2
+  TCNT2 = 0;
+  // Habilita a interrupção do overflow do Timer2
+  TIMSK2 |= (1 << TOIE2);
+
   // Habilita a interrupção global
   sei();
 
   // variáveis para o sensor de gotas
   controlenumerodegotas = 0;    // controla o numero de gotas
   numeroGotasDetectadas = 0;    // quantidade de gotas detectadas
+
+  // inicializando o contador como zero
+  contador = 0;
 
 }
 
@@ -190,15 +258,33 @@ void executa() {    // função que vai rodar em loop de execução do sistema
       opcao[i] = '\0';
     }
 
+    // acionamento ou não do buzzer
+    u16 leitura = ADC_read(ADC0D);          // pega a leitura do pino analógico PC0
+    tensao = leitura * 5.0 / 1023;          // faz o calculo da tensao que está sendo aplicada pelo pino
+    distancia = (20 - tensao * 4);          // faz a corelação entre a tensão e a distancia
+
+    if (distancia < 1.25) {  // caso algo seja detectado a menos de 5cm
+
+      PORTD |= Buzzer;   // liga o buzzer
+      tone(4, 1000);     // Frequência de 1000 Hz
+      motorFunciona(0);  // desliga o motor
+    } else {             // Desligar o buzzer
+      noTone(4);
+    }
+
+    // analisa qual ação o usuário deseja fazer
     UART_Transmit("Deseja alterar algum valor? ");
     UART_Receive(opcao, 4);   // recebimento da opcao escolhida
 
     if (opcao[0] == 's' && opcao[1] == 'i' && opcao[2] == 'm') {
-      controle = true;              // volta pra colocar as informações
+      controle = true;        // volta pra colocar as informações
 
-      OCR0A = 0;                    // desliga o motor
+      PORTD &= ~Buzzer;       // desliga o buzzer
+
+      OCR0A = 0;              // desliga o motor
 
       numeroGotasDetectadas = 0;    // zera a contagem do numero de gotas
+
     }
     else if (opcao[0] == 'n' && opcao[1] == 'a' && opcao[2] == 'o') {
       // mostra os valores calculados do erro e deixa o motor funcionando
@@ -207,14 +293,21 @@ void executa() {    // função que vai rodar em loop de execução do sistema
       int op = int(potencia);   // var aux para mandar a potencia que o motor ira trabalhar
       motorFunciona(op);
 
-      // fazendo o calculo do erro e mostrando ele
+      // calculo do erro, fluxo real e saida vo valor de erro no monitor serial
+      fluxoReal = numeroGotasDetectadas / ((contador / 61) * 60) * 0.05;               // primeiro eu converti o contador para min
+      erro = ((fluxoReal - fluxo) / fluxo) * 100.0;
+      dtostrf(erro, 4, 2, erroAux);                                               // transformando o erro em string para saída no monitor serial
+      UART_Transmit("Erro: ");
+      UART_Transmit(erroAux);
+      UART_Transmit(" %\n");
+
 
       // saida da quantidade de gotas
 //      sprintf(resposta, "Numero de gotas: %d \n", numeroGotasDetectadas);
 //      UART_Transmit(resposta);
 
     }
-    //Entrada inválida
+    // entrada inválida na opção de escolha
     else {
       UART_Transmit("Opcao invalida!!\n");
       UART_Transmit("Coloque sim ou nao\n");
